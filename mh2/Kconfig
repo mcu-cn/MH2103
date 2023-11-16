@@ -50,7 +50,7 @@ config HAVE_MH2_USBFS
     default y if MACH_MH21 || MACH_MH24
 config HAVE_MH2_USBOTG
     bool
-    default y if MACH_MH21 || MACH_MH24
+    default y if MACH_MH24
 config HAVE_MH2_CANBUS
     bool
     default y if MACH_MH21 || MACH_MH24x5 || MACH_MH2446 || MACH_MH20x2
@@ -242,7 +242,7 @@ choice
         select CANSERIAL
     config MH2_CANBUS_PA11_PB9
         bool "CAN bus (on PA11/PB9)"
-        depends on HAVE_MH2_CANBUS || HAVE_MH2_FDCANBUS
+        depends on !MACH_MH21 && (HAVE_MH2_CANBUS || HAVE_MH2_FDCANBUS)
         select CANSERIAL
     config MH2_MMENU_CANBUS_PB8_PB9
         bool "CAN bus (on PB8/PB9)" if LOW_LEVEL_OPTIONS
