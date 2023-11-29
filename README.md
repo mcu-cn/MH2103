@@ -7,7 +7,7 @@
 # 3.下载本软件包
   使用命令cd到klipper固件同级目录（注意，不是进入到klipper固件文件夹内，而是写它的顶层目录同级）
   
-  使用命令git clone git@github.com:mcu-cn/MH2103.git 下载本软件包
+  使用命令git clone https://github.com/mcu-cn/MH2103.git 下载本软件包
 # 4.安装MH2103到klipper固件
   命令： python MH2103/mh2.py <你的klipper文件夹名>
   
