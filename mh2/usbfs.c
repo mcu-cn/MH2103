@@ -298,15 +298,52 @@ usb_reset(void)
     USB->CNTR = USB_CNTR_CTRM | USB_CNTR_RESETM;
     USB->DADDR = USB_DADDR_EF;
 }
-
+#define _GetENDPOINT(bEpNum)        ((uint16_t)(*((volatile unsigned*)0x40005C00L + bEpNum)))
+#define _SetENDPOINT(bEpNum,wRegValue)  (*((volatile unsigned*)0x40005C00L + bEpNum)= (uint16_t)wRegValue)
+#define _SetEPRxTxStatus(bEpNum,wStaterx,wStatetx) {\
+    register uint32_t _wRegVal;   \
+    _wRegVal = _GetENDPOINT(bEpNum) & (USB_EPRX_DTOGMASK | USB_EPTX_STAT) ;\
+    /* toggle first bit ? */  \
+    if((USB_EPRX_DTOG1 & wStaterx)!= 0) \
+      _wRegVal ^= USB_EPRX_DTOG1;  \
+    /* toggle second bit ? */  \
+    if((USB_EPRX_DTOG2 & wStaterx)!= 0) \
+      _wRegVal ^= USB_EPRX_DTOG2;  \
+    /* toggle first bit ? */     \
+    if((USB_EPTX_DTOG1 & wStatetx)!= 0)      \
+      _wRegVal ^= USB_EPTX_DTOG1;        \
+    /* toggle second bit ?  */         \
+    if((USB_EPTX_DTOG2 & wStatetx)!= 0)      \
+      _wRegVal ^= USB_EPTX_DTOG2;        \
+    _SetENDPOINT(bEpNum, _wRegVal | USB_EP_CTR_RX | USB_EP_CTR_TX);    \
+  }
+#define _ClearEP_CTR_TX(bEpNum)   (_SetENDPOINT(bEpNum, _GetENDPOINT(bEpNum) & 0xFF7F & USB_EPREG_MASK))
+#define _ClearEP_CTR_RX(bEpNum)   (_SetENDPOINT(bEpNum, _GetENDPOINT(bEpNum) & 0x7FFF & USB_EPREG_MASK))
 // Main irq handler
 void
 USB_IRQHandler(void)
 {
-    uint32_t istr = USB->ISTR;
-    if (istr & USB_ISTR_CTR) {
+    volatile uint16_t istr;
+    while ((istr = USB->ISTR) & USB_ISTR_CTR) {
         // Endpoint activity
-        uint32_t ep = istr & USB_ISTR_EP_ID;
+        uint16_t ep = istr & USB_ISTR_EP_ID;
+        for(uint8_t i = 0;i < 8; i++)
+        {
+            uint16_t nstr = _GetENDPOINT(i);
+            if(nstr & (USB_EP_CTR_RX | USB_EP_CTR_TX))
+            {
+                ep = i;
+                if(nstr & USB_EP_CTR_RX)
+                {
+                    istr |= USB_ISTR_DIR;
+                }
+                if(nstr & USB_EP_CTR_TX)
+                {
+                    istr &= ~USB_ISTR_DIR;
+                }
+                break;
+            }
+        }
         uint32_t epr = USB_EPR[ep];
         USB_EPR[ep] = epr & EPR_RWBITS;
         if (ep == 0) {
@@ -316,11 +353,51 @@ USB_IRQHandler(void)
                 USB->DADDR = set_address;
                 set_address = 0;
             }
-        } else if (ep == USB_CDC_EP_BULK_OUT) {
-            usb_notify_bulk_out();
-        } else if (ep == USB_CDC_EP_BULK_IN) {
-            usb_notify_bulk_in();
+            volatile uint16_t SaveRState = _GetENDPOINT(0);
+            uint16_t SaveTState = SaveRState & USB_EPTX_STAT; //EPTX_STAT
+            SaveRState &= USB_EPRX_STAT;
+            _SetEPRxTxStatus(0,USB_EP_RX_NAK,USB_EP_TX_NAK);
+            if ((istr & USB_ISTR_DIR) == 0)
+            {
+                _ClearEP_CTR_TX(0);
+                _SetEPRxTxStatus(0,SaveRState,SaveTState);
+                return;
+            }
+            volatile uint16_t reg = _GetENDPOINT(0);
+            if ((reg & USB_EP_SETUP) || (reg & USB_EP_CTR_RX))
+            {
+                _ClearEP_CTR_RX(0); /* SETUP bit kept frozen while CTR_RX = 1 */
+                _SetEPRxTxStatus(0,SaveRState,SaveTState);
+                return;
+            }
         }
+        else {
+            volatile uint16_t reg = _GetENDPOINT(0);
+            if ((reg & USB_EP_CTR_RX) != 0)
+            {
+                /* clear int flag */
+                _ClearEP_CTR_RX(ep);
+
+                /* call OUT service function */
+                // (*pEpInt_OUT[EPindex-1])();
+                usb_notify_bulk_out();
+            }
+
+            if ((reg & USB_EP_CTR_TX) != 0)
+            {
+                /* clear int flag */
+                _ClearEP_CTR_TX(ep);
+
+                /* call IN service function */
+                // (*pEpInt_IN[EPindex-1])();
+                usb_notify_bulk_in();
+            }
+        } 
+        // else if (ep == USB_CDC_EP_BULK_OUT) {
+        //     usb_notify_bulk_out();
+        // } else if (ep == USB_CDC_EP_BULK_IN) {
+        //     usb_notify_bulk_in();
+        // }
     }
     if (istr & USB_ISTR_RESET) {
         // USB Reset
