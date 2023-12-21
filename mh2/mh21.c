@@ -224,14 +224,30 @@ clock_setup(void)
         RCC->CR |= RCC_CR_PLLON;
         while (!(RCC->CR & RCC_CR_PLLRDY));//待PLL稳定
         uint32_t temp = RCC->CFGR;
+
+        //HCLK-div1
         temp &= 0xFFFFFFFC; //[1:0]
         temp |= 0x00000002; //选择PLL作系统时钟源
         temp &= 0xFFFFFF0F; //[7:4]
-        // temp |= 0x00000000; //HCLK-div1
+        // temp |= 0x00000000;
+
+        //PPRE1-div2
         temp &= 0xFFFFF8FF; //[10:8]
-        temp |= 0x00000400; //PPRE1-div2
+        temp |= 0x00000400; 
+
+        //PPRE2-div1
         temp &= 0xFFFFC7FF; //[13:11]
-        // temp |= 0x00000000; //PPRE2-div1
+        // temp |= 0x00000000;
+
+        //USB:div4.5
+        temp &= ~(1UL << 31);
+        temp &= ~((1UL << 23) | (1UL << 22));
+        temp |= (uint32_t)0x80800000;
+
+        //ADC:div32
+        temp &= (uint32_t)0x9FFF3FFF;
+        temp |= (uint32_t)0x20004000; //32
+        // temp |= (uint32_t)0x20000000; //16
         RCC->CFGR = temp;
     #else
         // Configure and enable PLL
@@ -253,6 +269,10 @@ clock_setup(void)
                     | ((div2 - 2) << RCC_CFGR_PLLMULL_Pos));
         }
         cfgr |= RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_ADCPRE_DIV8;
+        //USB:div1.5
+        cfgr &= ~(1UL << 31);
+        cfgr &= ~((1UL << 23) | (1UL << 22));
+        
         RCC->CFGR = cfgr;
         RCC->CR |= RCC_CR_PLLON;
 
