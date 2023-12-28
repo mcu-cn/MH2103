@@ -13,6 +13,9 @@
 #include "internal.h" // GPIO
 #include "sched.h" // DECL_INIT
 
+uint32_t bed_led_val = 1, hot_led_val = 1;
+struct gpio_out bed_led,hot_led; //YSZ-GOGO
+
 #if CONFIG_MACH_MH21 || CONFIG_MACH_MH2G4
   // Transfer memory is accessed with 32bits, but contains only 16bits of data
   typedef volatile uint32_t epmword_t;
@@ -356,11 +359,9 @@ usb_reset(void)
     USB->DADDR = USB_DADDR_EF;
 }
 
-#define _GetENDPOINT(bEpNum)        ((uint16_t)(*((volatile unsigned*)0x40005C00L + bEpNum)))
-#define _SetENDPOINT(bEpNum,wRegValue)  (*((volatile unsigned*)0x40005C00L + bEpNum)= (uint16_t)wRegValue)
 #define _SetEPRxTxStatus(bEpNum,wStaterx,wStatetx) {\
     register uint32_t _wRegVal;   \
-    _wRegVal = _GetENDPOINT(bEpNum) & (USB_EPRX_DTOGMASK | USB_EPTX_STAT) ;\
+    _wRegVal = USB_EPR[bEpNum] & (USB_EPRX_DTOGMASK | USB_EPTX_STAT) ;\
     /* toggle first bit ? */  \
     if((USB_EPRX_DTOG1 & wStaterx)!= 0) \
       _wRegVal ^= USB_EPRX_DTOG1;  \
@@ -373,118 +374,97 @@ usb_reset(void)
     /* toggle second bit ?  */         \
     if((USB_EPTX_DTOG2 & wStatetx)!= 0)      \
       _wRegVal ^= USB_EPTX_DTOG2;        \
-    _SetENDPOINT(bEpNum, _wRegVal | USB_EP_CTR_RX | USB_EP_CTR_TX);    \
+    USB_EPR[bEpNum] = _wRegVal | USB_EP_CTR_RX | USB_EP_CTR_TX;    \
   }
-#define _ClearEP_CTR_TX(bEpNum)   (_SetENDPOINT(bEpNum, _GetENDPOINT(bEpNum) & 0xFF7F & USB_EPREG_MASK))
-#define _ClearEP_CTR_RX(bEpNum)   (_SetENDPOINT(bEpNum, _GetENDPOINT(bEpNum) & 0x7FFF & USB_EPREG_MASK))
 // Main irq handler
 void
 USB_IRQHandler(void)
 {
-    #if 1
     volatile uint32_t istr = USB->ISTR;
     if(istr & USB_ISTR_CTR) {
         // Endpoint activity
-        // uint32_t ep = istr & USB_ISTR_EP_ID, epr = USB_EPR[ep];
+        #if 0
+        uint32_t ep = istr & USB_ISTR_EP_ID, epr = USB_EPR[ep];
+        #else
         uint32_t ep,epr;
         for(ep = 0; ep < 8; ep++)
         {
             epr = USB_EPR[ep];
-            if(epr & (USB_EP_CTR_RX | USB_EP_CTR_TX))break;
-        }
-        if (ep == USB_CDC_EP_BULK_OUT) {
-            USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0)
-                        | bulk_out_push_flag);
-            bulk_out_push_flag = 0;
-            usb_notify_bulk_out();
-        } else if (ep == USB_CDC_EP_BULK_IN) {
-            USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0)
-                        | bulk_in_pop_flag);
-            bulk_in_pop_flag = 0;
-            usb_notify_bulk_in();
-        } else if (ep == 0) {
-            USB_EPR[ep] = calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0);
-            usb_notify_ep0();
-            if (epr & USB_EP_CTR_TX && set_address) {
-                // Apply address after last "in" message transmitted
-                USB->DADDR = set_address;
-                set_address = 0;
-            }
-        }
-    }
-    #else
-    volatile uint16_t istr;
-    while ((istr = USB->ISTR) & USB_ISTR_CTR) {
-        // Endpoint activity
-        uint16_t ep = istr & USB_ISTR_EP_ID;
-        for(uint8_t i = 0;i < 8; i++)
-        {
-            uint16_t nstr = _GetENDPOINT(i);
-            if(nstr & (USB_EP_CTR_RX | USB_EP_CTR_TX))
-            {
-                ep = i;
-                if(nstr & USB_EP_CTR_RX)
-                {
+            if(epr & (USB_EP_CTR_RX | USB_EP_CTR_TX)) {
+                if(epr & USB_EP_CTR_RX) {
                     istr |= USB_ISTR_DIR;
                 }
-                if(nstr & USB_EP_CTR_TX)
-                {
+                if(epr & USB_EP_CTR_TX) {
                     istr &= ~USB_ISTR_DIR;
                 }
                 break;
             }
         }
-        uint32_t epr = USB_EPR[ep];
-        USB_EPR[ep] = epr & EPR_RWBITS;
-        if (ep == 0) {
-            usb_notify_ep0();
-            if (epr & USB_EP_CTR_TX && set_address) {
-                // Apply address after last "in" message transmitted
-                USB->DADDR = set_address;
-                set_address = 0;
-            }
-            volatile uint16_t SaveRState = _GetENDPOINT(0);
-            uint16_t SaveTState = SaveRState & USB_EPTX_STAT; //EPTX_STAT
-            SaveRState &= USB_EPRX_STAT;
-            _SetEPRxTxStatus(0,USB_EP_RX_NAK,USB_EP_TX_NAK);
-            if ((istr & USB_ISTR_DIR) == 0)
-            {
-                _ClearEP_CTR_TX(0);
-                _SetEPRxTxStatus(0,SaveRState,SaveTState);
-                return;
-            }
-            volatile uint16_t reg = _GetENDPOINT(0);
-            if ((reg & USB_EP_SETUP) || (reg & USB_EP_CTR_RX))
-            {
-                _ClearEP_CTR_RX(0); /* SETUP bit kept frozen while CTR_RX = 1 */
-                _SetEPRxTxStatus(0,SaveRState,SaveTState);
-                return;
-            }
-        }
-        else {
-            volatile uint16_t reg = _GetENDPOINT(0);
-            if ((reg & USB_EP_CTR_RX) != 0)
-            {
-                /* clear int flag */
-                _ClearEP_CTR_RX(ep);
-
-                /* call OUT service function */
-                // (*pEpInt_OUT[EPindex-1])();
+        #endif
+        #if 1
+            if (ep == USB_CDC_EP_BULK_OUT) {
+                gpio_out_write(hot_led,hot_led_val);
+                if(hot_led_val)hot_led_val = 0;
+                else hot_led_val = 1;
+                USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0)
+                            | bulk_out_push_flag);
+                bulk_out_push_flag = 0;
                 usb_notify_bulk_out();
-            }
-
-            if ((reg & USB_EP_CTR_TX) != 0)
-            {
-                /* clear int flag */
-                _ClearEP_CTR_TX(ep);
-
-                /* call IN service function */
-                // (*pEpInt_IN[EPindex-1])();
+            } else if (ep == USB_CDC_EP_BULK_IN) {
+                gpio_out_write(bed_led,bed_led_val);
+                if(bed_led_val)bed_led_val = 0;
+                else bed_led_val = 1;
+                USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0)
+                            | bulk_in_pop_flag);
+                bulk_in_pop_flag = 0;
                 usb_notify_bulk_in();
+            } else if (ep == 0) {
+                USB_EPR[ep] = calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0);
+                usb_notify_ep0();
+                if (epr & USB_EP_CTR_TX && set_address) {
+                    // Apply address after last "in" message transmitted
+                    USB->DADDR = set_address;
+                    set_address = 0;
+                }
             }
-        }
+        #else
+            if (ep == 0) {
+                USB_EPR[ep] = calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0);
+                usb_notify_ep0();
+                if (epr & USB_EP_CTR_TX && set_address) {
+                    // Apply address after last "in" message transmitted
+                    USB->DADDR = set_address;
+                    set_address = 0;
+                }
+            }
+            else {
+                if(epr & USB_EP_CTR_TX) {
+                    uint32_t t = calc_epr_bits(epr, USB_EP_CTR_TX, 0);
+                    if (ep == USB_CDC_EP_BULK_IN) {
+                        gpio_out_write(bed_led,bed_led_val);
+                        if(bed_led_val)bed_led_val = 0;
+                        else bed_led_val = 1;
+                        USB_EPR[ep] = t | bulk_in_pop_flag;
+                        bulk_in_pop_flag = 0;
+                        usb_notify_bulk_in();
+                    }
+                    else USB_EPR[ep] = t;
+                }
+                if(epr & USB_EP_CTR_RX) {
+                    uint32_t t = calc_epr_bits(epr, USB_EP_CTR_RX, 0);
+                    if (ep == USB_CDC_EP_BULK_OUT) {
+                        gpio_out_write(hot_led,hot_led_val);
+                        if(hot_led_val)hot_led_val = 0;
+                        else hot_led_val = 1;
+                        USB_EPR[ep] = t | bulk_out_push_flag;
+                        bulk_out_push_flag = 0;
+                        usb_notify_bulk_out();
+                    }
+                    else USB_EPR[ep] = t;
+                }
+            }
+        #endif
     }
-    #endif
     if (istr & USB_ISTR_RESET) {
         // USB Reset
         USB->ISTR = (uint16_t)~USB_ISTR_RESET;
@@ -499,15 +479,21 @@ DECL_CONSTANT_STR("RESERVE_PINS_USB", "PA11,PA12");
 void
 usb_init(void)
 {
-    if (CONFIG_MACH_MH21) {
-        // Pull the D+ pin low briefly to signal a new connection
-        gpio_out_setup(GPIO('A', 12), 0);
-        udelay(5000);
-        gpio_in_setup(GPIO('A', 12), 0);
-    }
-
     // Enable USB clock
     enable_pclock(USB_BASE);
+
+    if(CONFIG_MACH_MH21) {
+        //先断开
+        DP_PUUP = 0;
+        USB->CNTR |= 1UL << 1; //USB断电,实际上硬件复位后本身就是1,即USB_Port_Set(0)
+        gpio_out_setup(GPIO('A', 12), 0); //PA12拉低
+        for(uint8_t i = 0; i < 200; i++)udelay(1000); //延时200ms
+        gpio_in_setup(GPIO('A', 12), 0);
+        //再连接
+        DP_PUUP = 1; //内部上拉
+        USB->CNTR &= ~(1UL << 1); //USB上电,即USB_Port_Set(1)
+        udelay(1000);//延时等待上电稳定
+    }
 
     // Setup USB packet memory
     btable_configure();
@@ -522,7 +508,17 @@ usb_init(void)
     USB->DADDR = 0;
     USB->CNTR = USB_CNTR_RESETM;
     USB->ISTR = 0;
-    // if (CONFIG_MACH_MH21) DP_PUUP = 1; //内部上拉
+    // hot_led = gpio_out_setup(GPIO('B', 0), 1);
+    // bed_led = gpio_out_setup(GPIO('B', 1), 1);
+    hot_led = gpio_out_setup(GPIO('C', 7), 1);
+    bed_led = gpio_out_setup(GPIO('C', 8), 1);
+    for(uint8_t i = 0; i < 6; i++) {
+        gpio_out_write(hot_led,hot_led_val);
+        if(hot_led_val)hot_led_val = 0;
+        else hot_led_val = 1;
+        for(uint16_t t = 0; t < 100; t++)udelay(1000);
+    }
+
     armcm_enable_irq(USB_IRQHandler, USBx_IRQn, 1);
 }
 DECL_INIT(usb_init);

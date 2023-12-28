@@ -102,6 +102,8 @@ config MH2_DFU_ROM_ADDRESS
 
 choice
     prompt "Bootloader offset"
+    config MH2_FLASH_START_0000
+        bool "No bootloader"
     config MH2_FLASH_START_800
         bool "2KiB bootloader (HID Bootloader)" if MACH_MH2103
     config MH2_FLASH_START_1000
@@ -114,8 +116,6 @@ choice
         bool "32KiB bootloader" if MACH_MH21 || MACH_MH24
     config MH2_FLASH_START_10000
         bool "64KiB bootloader" if MACH_MH2103 || MACH_MH24x5
-    config MH2_FLASH_START_0000
-        bool "No bootloader"
 endchoice
 config FLASH_APPLICATION_ADDRESS
     hex
@@ -136,21 +136,15 @@ config ARMCM_RAM_VECTORTABLE
 ######################################################################
 # Clock
 ######################################################################
-
+# 由于需要满足216M整数倍,因此只支持8,12,24的晶振
 choice
     prompt "Clock Reference" if LOW_LEVEL_OPTIONS
     config MH2_CLOCK_REF_8M
         bool "8 MHz crystal"
     config MH2_CLOCK_REF_12M
         bool "12 MHz crystal"
-    config MH2_CLOCK_REF_16M
-        bool "16 MHz crystal"
-    config MH2_CLOCK_REF_20M
-        bool "20 MHz crystal"
     config MH2_CLOCK_REF_24M
         bool "24 MHz crystal"
-    config MH2_CLOCK_REF_25M
-        bool "25 MHz crystal"
     config MH2_CLOCK_REF_INTERNAL
         bool "Internal clock"
 endchoice

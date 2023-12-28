@@ -174,6 +174,7 @@ get_pclock_frequency(uint32_t periph_base)
     case (uint32_t)ADC3:
     case (uint32_t)TIM1:
     case (uint32_t)USART1: return rcc.PCLK2_Frequency;
+    // case (uint32_t)USB: return 48000000;
     }
     return FREQ_PERIPH;
 }
@@ -211,50 +212,55 @@ void rccDeInit(void)
 static void
 clock_setup(void)
 {
+    rccDeInit();
     #if CONFIG_MH2_SYSCLK_216
         #if CONFIG_MH2_CLOCK_REF_INTERNAL //216必须使用外部晶振
         #error must config external crystal when sysclk is 216MHz
         #endif
         uint32_t MH_RCC_PLLConfig(uint32_t RCC_PLLSource, uint32_t RCC_PLLMul, uint8_t Latency);
-        rccDeInit();
         RCC->CR |= RCC_CR_HSEON;//打开HSE
         while(!(RCC->CR & RCC_CR_HSERDY));//待HSE稳定
         *(__IO uint32_t *) CR_PLLON_BB = 0;
+        #if CONFIG_MH2_CLOCK_REF_8M
         MH_RCC_PLLConfig(RCC_PLLSource_HSE_Div1,RCC_PLLMul_27,1);
-        RCC->CR |= RCC_CR_PLLON;
-        while (!(RCC->CR & RCC_CR_PLLRDY));//待PLL稳定
-        uint32_t temp = RCC->CFGR;
+        #elif CONFIG_MH2_CLOCK_REF_12M
+        MH_RCC_PLLConfig(RCC_PLLSource_HSE_Div1,RCC_PLLMul_18,1);
+        #elif CONFIG_MH2_CLOCK_REF_24M
+        MH_RCC_PLLConfig(RCC_PLLSource_HSE_Div1,RCC_PLLMul_9,1);
+        #else
+        #error current external clock only support 8M,12M,24M
+        #endif
+        uint32_t cfgr = RCC->CFGR;
 
         //HCLK-div1
-        temp &= 0xFFFFFFFC; //[1:0]
-        temp |= 0x00000002; //选择PLL作系统时钟源
-        temp &= 0xFFFFFF0F; //[7:4]
-        // temp |= 0x00000000;
+        cfgr &= 0xFFFFFFFC; //[1:0]
+        cfgr |= 0x00000002; //选择PLL作系统时钟源
+        cfgr &= 0xFFFFFF0F; //[7:4]
+        // cfgr |= 0x00000000;
 
         //PPRE1-div2
-        temp &= 0xFFFFF8FF; //[10:8]
-        temp |= 0x00000400; 
+        cfgr &= 0xFFFFF8FF; //[10:8]
+        cfgr |= 0x00000400; 
 
         //PPRE2-div1
-        temp &= 0xFFFFC7FF; //[13:11]
-        // temp |= 0x00000000;
+        cfgr &= 0xFFFFC7FF; //[13:11]
+        // cfgr |= 0x00000000;
 
-        //USB:div4.5
-        temp &= ~(1UL << 31);
-        temp &= ~((1UL << 23) | (1UL << 22));
-        temp |= (uint32_t)0x80800000;
+        //USB:216M div4.5 = 48M
+        cfgr &= ~((1UL << 22) | (1UL << 23) | (1UL << 31));
+        cfgr |= (uint32_t)0x80800000;
 
         //ADC:div32
-        temp &= (uint32_t)0x9FFF3FFF;
-        temp |= (uint32_t)0x20004000; //32
-        // temp |= (uint32_t)0x20000000; //16
-        RCC->CFGR = temp;
+        cfgr &= (uint32_t)0x9FFF3FFF;
+        cfgr |= (uint32_t)0x20004000; //32
+        // cfgr |= (uint32_t)0x20000000; //16
     #else
         // Configure and enable PLL
         uint32_t cfgr;
-        if (!CONFIG_MH2_CLOCK_REF_INTERNAL) {
+        if (!CONFIG_STM32_CLOCK_REF_INTERNAL) {
             // Configure 72Mhz PLL from external crystal (HSE)
             RCC->CR |= RCC_CR_HSEON;
+            while(!(RCC->CR & RCC_CR_HSERDY));//待HSE稳定
             uint32_t div = CONFIG_CLOCK_FREQ / (CONFIG_CLOCK_REF_FREQ / 2);
             cfgr = 1 << RCC_CFGR_PLLSRC_Pos;
             if ((div & 1) && div <= 16)
@@ -269,25 +275,24 @@ clock_setup(void)
                     | ((div2 - 2) << RCC_CFGR_PLLMULL_Pos));
         }
         cfgr |= RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_ADCPRE_DIV8;
-        //USB:div1.5
-        cfgr &= ~(1UL << 31);
-        cfgr &= ~((1UL << 23) | (1UL << 22));
-        
-        RCC->CFGR = cfgr;
-        RCC->CR |= RCC_CR_PLLON;
-
-        // Set flash latency
-        FLASH->ACR = (2 << FLASH_ACR_LATENCY_Pos) | FLASH_ACR_PRFTBE;
-
-        // Wait for PLL lock
-        while (!(RCC->CR & RCC_CR_PLLRDY))
-            ;
-
-        // Switch system clock to PLL
-        RCC->CFGR = cfgr | RCC_CFGR_SW_PLL;
-        while ((RCC->CFGR & RCC_CFGR_SWS_Msk) != RCC_CFGR_SWS_PLL)
-            ;
+        //USB:72M div1.5 = 48M
+        cfgr &= ~((1UL << 22) | (1UL << 23) | (1UL << 31));
     #endif
+        
+    RCC->CFGR = cfgr;
+    RCC->CR |= RCC_CR_PLLON;
+
+    // Set flash latency
+    FLASH->ACR = (2 << FLASH_ACR_LATENCY_Pos) | FLASH_ACR_PRFTBE;
+
+    // Wait for PLL lock
+    while (!(RCC->CR & RCC_CR_PLLRDY))
+        ;
+
+    // Switch system clock to PLL
+    RCC->CFGR = cfgr | RCC_CFGR_SW_PLL;
+    while ((RCC->CFGR & RCC_CFGR_SWS_Msk) != RCC_CFGR_SWS_PLL)
+        ;
 }
 
 
