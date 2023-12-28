@@ -359,23 +359,6 @@ usb_reset(void)
     USB->DADDR = USB_DADDR_EF;
 }
 
-#define _SetEPRxTxStatus(bEpNum,wStaterx,wStatetx) {\
-    register uint32_t _wRegVal;   \
-    _wRegVal = USB_EPR[bEpNum] & (USB_EPRX_DTOGMASK | USB_EPTX_STAT) ;\
-    /* toggle first bit ? */  \
-    if((USB_EPRX_DTOG1 & wStaterx)!= 0) \
-      _wRegVal ^= USB_EPRX_DTOG1;  \
-    /* toggle second bit ? */  \
-    if((USB_EPRX_DTOG2 & wStaterx)!= 0) \
-      _wRegVal ^= USB_EPRX_DTOG2;  \
-    /* toggle first bit ? */     \
-    if((USB_EPTX_DTOG1 & wStatetx)!= 0)      \
-      _wRegVal ^= USB_EPTX_DTOG1;        \
-    /* toggle second bit ?  */         \
-    if((USB_EPTX_DTOG2 & wStatetx)!= 0)      \
-      _wRegVal ^= USB_EPTX_DTOG2;        \
-    USB_EPR[bEpNum] = _wRegVal | USB_EP_CTR_RX | USB_EP_CTR_TX;    \
-  }
 // Main irq handler
 void
 USB_IRQHandler(void)
