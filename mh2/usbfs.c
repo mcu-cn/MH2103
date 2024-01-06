@@ -241,12 +241,14 @@ usb_send_bulk_in(void *data, uint_fast8_t len)
         return -1;
     uint32_t ep = USB_CDC_EP_BULK_IN;
     uint32_t bipp = bulk_in_push_pos, bufnum = bipp & 1;
+    uint32_t epr = USB_EPR[ep]; //YSZ-MODIFY
     bulk_in_push_pos = bipp ^ 1;
     btable_write_packet(ep, bufnum, data, len);
     writel(&bulk_in_pop_flag, USB_EP_DTOG_RX);
+    USB_EPR[ep] = calc_epr_bits(epr, USB_EPTX_STAT, USB_EP_TX_VALID); //YSZ-MODIFY
 
     // Check if hardware needs to be notified
-    uint32_t epr = USB_EPR[ep];
+    // uint32_t epr = USB_EPR[ep]; //YSZ-MODIFY
     if (epr_is_dbuf_blocking(epr) && readl(&bulk_in_pop_flag)) {
         writel(&bulk_in_pop_flag, 0);
         if (unlikely(bipp & BI_START)) {
@@ -262,7 +264,7 @@ usb_send_bulk_in(void *data, uint_fast8_t len)
             USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_RX;
         }
     }
-
+    USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_RX; //YSZ-MODIFY
     return len;
 }
 
@@ -381,15 +383,14 @@ USB_IRQHandler(void)
             if(hot_led_val)hot_led_val = 0;
             else hot_led_val = 1;
             USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0)
-                        | bulk_out_push_flag);
+                        | bulk_in_pop_flag);
             bulk_out_push_flag = 0;
             usb_notify_bulk_out();
         } else if (ep == USB_CDC_EP_BULK_IN) {
             gpio_out_write(bed_led,bed_led_val);
             if(bed_led_val)bed_led_val = 0;
             else bed_led_val = 1;
-            USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0)
-                        | bulk_in_pop_flag);
+            USB_EPR[ep] = calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0); //YSZ-MODIFY
             bulk_in_pop_flag = 0;
             usb_notify_bulk_in();
         } else if (ep == 0) {
@@ -445,10 +446,10 @@ usb_init(void)
     USB->DADDR = 0;
     USB->CNTR = USB_CNTR_RESETM;
     USB->ISTR = 0;
-    // hot_led = gpio_out_setup(GPIO('B', 0), 1);
-    // bed_led = gpio_out_setup(GPIO('B', 1), 1);
-    hot_led = gpio_out_setup(GPIO('C', 7), 1);
-    bed_led = gpio_out_setup(GPIO('C', 8), 1);
+    hot_led = gpio_out_setup(GPIO('B', 0), 1);
+    bed_led = gpio_out_setup(GPIO('B', 1), 1);
+    // hot_led = gpio_out_setup(GPIO('C', 7), 1);
+    // bed_led = gpio_out_setup(GPIO('C', 8), 1);
 
     armcm_enable_irq(USB_IRQHandler, USBx_IRQn, 1);
 }
