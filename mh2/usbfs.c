@@ -15,6 +15,8 @@
 
 uint32_t bed_led_val = 1, hot_led_val = 1;
 struct gpio_out bed_led,hot_led; //YSZ-GOGO
+//#define BULK_OUT_USE_DBUF //这里使能双缓冲
+//#define BULK_IN_USE_DBUF
 
 #if CONFIG_MACH_MH21 || CONFIG_MACH_MH2G4
   // Transfer memory is accessed with 32bits, but contains only 16bits of data
@@ -193,41 +195,54 @@ calc_epr_bits(uint32_t epr, uint32_t mask, uint32_t value)
 }
 
 // Check if double buffering endpoint hardware can no longer send/receive
+#if defined(BULK_OUT_USE_DBUF) || defined(BULK_IN_USE_DBUF)
 static int
 epr_is_dbuf_blocking(uint32_t epr)
 {
     return !(((epr >> (USB_EP_DTOG_RX_Pos - USB_EP_DTOG_TX_Pos)) ^ epr)
              & USB_EP_DTOG_TX);
 }
+#endif
 
 
 /****************************************************************
  * USB interface
  ****************************************************************/
-
 static uint32_t bulk_out_pop_count, bulk_out_push_flag;
-
+static uint32_t bulk_out_flag = 0, bulk_in_flag = 0;
 int_fast8_t
 usb_read_bulk_out(void *data, uint_fast8_t max_len)
 {
-    if (readl(&bulk_out_push_flag))
-        // No data ready
-        return -1;
-    uint32_t ep = USB_CDC_EP_BULK_OUT;
-    int bufnum = bulk_out_pop_count & 1;
-    bulk_out_pop_count++;
-    uint32_t count = btable_read_packet(ep, bufnum, data, max_len);
-    writel(&bulk_out_push_flag, USB_EP_DTOG_TX);
+    #ifndef BULK_OUT_USE_DBUF
+        if(bulk_out_flag == 0)
+            return -1;
+        uint32_t ep = USB_CDC_EP_BULK_OUT;
+        uint32_t count = btable_read_packet(ep, BUFRX, data, max_len);
+        
+        uint32_t epr = USB_EPR[ep];
+        USB_EPR[ep] = calc_epr_bits(epr, USB_EPRX_STAT, USB_EP_RX_VALID);
+        bulk_out_flag = 0;
+        return count;
+    #else
+        if (readl(&bulk_out_push_flag))
+            // No data ready
+            return -1;
+        uint32_t ep = USB_CDC_EP_BULK_OUT;
+        int bufnum = bulk_out_pop_count & 1;
+        bulk_out_pop_count++;
+        uint32_t count = btable_read_packet(ep, bufnum, data, max_len);
+        writel(&bulk_out_push_flag, USB_EP_DTOG_TX);
 
-    // Check if irq handler pulled another packet before push flag update
-    uint32_t epr = USB_EPR[ep];
-    if (epr_is_dbuf_blocking(epr) && readl(&bulk_out_push_flag)) {
-        // Second packet was already read - must notify hardware
-        writel(&bulk_out_push_flag, 0);
-        USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_TX;
-    }
+        // Check if irq handler pulled another packet before push flag update
+        uint32_t epr = USB_EPR[ep];
+        if (epr_is_dbuf_blocking(epr) && readl(&bulk_out_push_flag)) {
+            // Second packet was already read - must notify hardware
+            writel(&bulk_out_push_flag, 0);
+            USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_TX;
+        }
 
-    return count;
+        return count;
+    #endif
 }
 
 static uint32_t bulk_in_push_pos, bulk_in_pop_flag;
@@ -236,36 +251,47 @@ static uint32_t bulk_in_push_pos, bulk_in_pop_flag;
 int_fast8_t
 usb_send_bulk_in(void *data, uint_fast8_t len)
 {
-    if (readl(&bulk_in_pop_flag))
-        // No buffer space available
-        return -1;
-    uint32_t ep = USB_CDC_EP_BULK_IN;
-    uint32_t bipp = bulk_in_push_pos, bufnum = bipp & 1;
-    uint32_t epr = USB_EPR[ep]; //YSZ-MODIFY
-    bulk_in_push_pos = bipp ^ 1;
-    btable_write_packet(ep, bufnum, data, len);
-    writel(&bulk_in_pop_flag, USB_EP_DTOG_RX);
-    USB_EPR[ep] = calc_epr_bits(epr, USB_EPTX_STAT, USB_EP_TX_VALID); //YSZ-MODIFY
+    #ifndef BULK_IN_USE_DBUF
+        uint32_t ep = USB_CDC_EP_BULK_IN;
+        uint32_t epr = USB_EPR[ep];
+        //if(bulk_in_flag == 1)
+        //    return -1;
+        btable_write_packet(ep, BUFTX, data, len);
+        USB_EPR[ep] = calc_epr_bits(epr, USB_EPTX_STAT, USB_EP_TX_VALID);
+        //bulk_in_flag = 1;
+        return len;
+    #else
+        if (readl(&bulk_in_pop_flag))
+            // No buffer space available
+            return -1;
+        uint32_t ep = USB_CDC_EP_BULK_IN;
+        uint32_t bipp = bulk_in_push_pos, bufnum = bipp & 1;
+        uint32_t epr = USB_EPR[ep]; //YSZ-MODIFY
+        bulk_in_push_pos = bipp ^ 1;
+        btable_write_packet(ep, bufnum, data, len);
+        writel(&bulk_in_pop_flag, USB_EP_DTOG_RX);
+        USB_EPR[ep] = calc_epr_bits(epr, USB_EPTX_STAT, USB_EP_TX_VALID); //YSZ-MODIFY
 
-    // Check if hardware needs to be notified
-    // uint32_t epr = USB_EPR[ep]; //YSZ-MODIFY
-    if (epr_is_dbuf_blocking(epr) && readl(&bulk_in_pop_flag)) {
-        writel(&bulk_in_pop_flag, 0);
-        if (unlikely(bipp & BI_START)) {
-            // Two packets are always sent when starting in double
-            // buffering mode, so wait for second packet before starting.
-            if (bipp == (BI_START | 1)) {
-                bulk_in_push_pos = 0;
-                writel(&bulk_in_pop_flag, USB_EP_KIND); // Dummy flag
-                USB_EPR[ep] = calc_epr_bits(epr, USB_EPTX_STAT
-                                            , USB_EP_TX_VALID);
+        // Check if hardware needs to be notified
+        // uint32_t epr = USB_EPR[ep]; //YSZ-MODIFY
+        if (epr_is_dbuf_blocking(epr) && readl(&bulk_in_pop_flag)) {
+            writel(&bulk_in_pop_flag, 0);
+            if (unlikely(bipp & BI_START)) {
+                // Two packets are always sent when starting in double
+                // buffering mode, so wait for second packet before starting.
+                if (bipp == (BI_START | 1)) {
+                    bulk_in_push_pos = 0;
+                    writel(&bulk_in_pop_flag, USB_EP_KIND); // Dummy flag
+                    USB_EPR[ep] = calc_epr_bits(epr, USB_EPTX_STAT
+                                                , USB_EP_TX_VALID);
+                }
+            } else {
+                USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_RX;
             }
-        } else {
-            USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_RX;
         }
-    }
-    USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_RX; //YSZ-MODIFY
-    return len;
+        USB_EPR[ep] = calc_epr_bits(epr, 0, 0) | USB_EP_DTOG_RX; //YSZ-MODIFY
+        return len;
+    #endif
 }
 
 int_fast8_t
@@ -348,12 +374,12 @@ usb_reset(void)
                    | USB_EP_RX_NAK | USB_EP_TX_NAK);
 
     ep = USB_CDC_EP_BULK_OUT;
-    USB_EPR[ep] = (USB_CDC_EP_BULK_OUT | USB_EP_BULK | USB_EP_KIND
+    USB_EPR[ep] = (USB_CDC_EP_BULK_OUT | USB_EP_BULK
                    | USB_EP_RX_NAK | USB_EP_DTOG_TX);
     bulk_out_push_flag = USB_EP_DTOG_TX;
 
     ep = USB_CDC_EP_BULK_IN;
-    USB_EPR[ep] = (USB_CDC_EP_BULK_IN | USB_EP_BULK | USB_EP_KIND
+    USB_EPR[ep] = (USB_CDC_EP_BULK_IN | USB_EP_BULK
                    | USB_EP_TX_NAK);
     bulk_in_pop_flag = USB_EP_DTOG_RX;
 
@@ -382,15 +408,16 @@ USB_IRQHandler(void)
             gpio_out_write(hot_led,hot_led_val);
             if(hot_led_val)hot_led_val = 0;
             else hot_led_val = 1;
-            USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0)
-                        | bulk_in_pop_flag);
+            USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX, 0));
             bulk_out_push_flag = 0;
+            bulk_out_flag = 1;
             usb_notify_bulk_out();
         } else if (ep == USB_CDC_EP_BULK_IN) {
             gpio_out_write(bed_led,bed_led_val);
             if(bed_led_val)bed_led_val = 0;
             else bed_led_val = 1;
-            USB_EPR[ep] = calc_epr_bits(epr, USB_EP_CTR_RX | USB_EP_CTR_TX, 0); //YSZ-MODIFY
+            USB_EPR[ep] = calc_epr_bits(epr, USB_EP_CTR_TX, 0); //YSZ-MODIFY
+            bulk_in_flag = 0;
             bulk_in_pop_flag = 0;
             usb_notify_bulk_in();
         } else if (ep == 0) {
