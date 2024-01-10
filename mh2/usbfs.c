@@ -13,8 +13,8 @@
 #include "internal.h" // GPIO
 #include "sched.h" // DECL_INIT
 
-uint32_t bed_led_val = 1, hot_led_val = 1;
-struct gpio_out bed_led,hot_led; //YSZ-GOGO
+// uint32_t bed_led_val = 1, hot_led_val = 1;
+// struct gpio_out bed_led,hot_led; //YSZ-GOGO
 //#define BULK_OUT_USE_DBUF //这里使能双缓冲
 //#define BULK_IN_USE_DBUF
 
@@ -405,17 +405,17 @@ USB_IRQHandler(void)
         }
         #endif
         if (ep == USB_CDC_EP_BULK_OUT) {
-            gpio_out_write(hot_led,hot_led_val);
-            if(hot_led_val)hot_led_val = 0;
-            else hot_led_val = 1;
+            // gpio_out_write(hot_led,hot_led_val);
+            // if(hot_led_val)hot_led_val = 0;
+            // else hot_led_val = 1;
             USB_EPR[ep] = (calc_epr_bits(epr, USB_EP_CTR_RX, 0));
             bulk_out_push_flag = 0;
             bulk_out_flag = 1;
             usb_notify_bulk_out();
         } else if (ep == USB_CDC_EP_BULK_IN) {
-            gpio_out_write(bed_led,bed_led_val);
-            if(bed_led_val)bed_led_val = 0;
-            else bed_led_val = 1;
+            // gpio_out_write(bed_led,bed_led_val);
+            // if(bed_led_val)bed_led_val = 0;
+            // else bed_led_val = 1;
             USB_EPR[ep] = calc_epr_bits(epr, USB_EP_CTR_TX, 0); //YSZ-MODIFY
             bulk_in_flag = 0;
             bulk_in_pop_flag = 0;
@@ -473,8 +473,8 @@ usb_init(void)
     USB->DADDR = 0;
     USB->CNTR = USB_CNTR_RESETM;
     USB->ISTR = 0;
-    hot_led = gpio_out_setup(GPIO('B', 0), 1);
-    bed_led = gpio_out_setup(GPIO('B', 1), 1);
+    // hot_led = gpio_out_setup(GPIO('B', 0), 1);
+    // bed_led = gpio_out_setup(GPIO('B', 1), 1);
     // hot_led = gpio_out_setup(GPIO('C', 7), 1);
     // bed_led = gpio_out_setup(GPIO('C', 8), 1);
 
